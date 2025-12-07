@@ -1,6 +1,6 @@
 """Точка входа в симулятор разработки игр."""
 
-import sys
+import argparse
 
 from game_dev_simulator.core import (
     Employee,
@@ -9,11 +9,12 @@ from game_dev_simulator.core import (
     GameStudio,
     MarketTrend,
 )
-from game_dev_simulator.ui import GameCLI
+from game_dev_simulator.ui import GameCLI, GamePygameUI
+from game_dev_simulator.ui.theme import DEFAULT_THEME, Theme
 
 
-def main() -> None:
-    """Собирает конфигурацию студии и запускает текстовый интерфейс."""
+def build_default_simulation() -> GameSimulation:
+    """Создаёт типовую стартовую конфигурацию студии."""
 
     employees = [
         Employee(
@@ -61,19 +62,25 @@ def main() -> None:
         projects=[project],
     )
     trend = MarketTrend(trending_genres=["RPG", "Strategy"], popular_platforms=["PC"])
-    simulation = GameSimulation(studio, market_trend=trend)
+    return GameSimulation(studio, market_trend=trend)
 
-    ui_mode = "cli"
-    for arg in sys.argv[1:]:
-        lowered = arg.lower()
-        if lowered in {"--ui=pygame", "--pygame", "pygame"}:
-            ui_mode = "pygame"
-            break
 
-    if ui_mode == "pygame":
-        from game_dev_simulator.ui import GamePygameUI
+def main() -> None:
+    """Собирает конфигурацию студии и запускает выбранный интерфейс."""
 
-        GamePygameUI().run(simulation)
+    parser = argparse.ArgumentParser(description="Game Dev Simulator")
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Запустить красивый pygame интерфейс вместо текстового меню",
+    )
+    args = parser.parse_args()
+
+    simulation = build_default_simulation()
+
+    if args.gui:
+        theme: Theme = DEFAULT_THEME
+        GamePygameUI(simulation, theme=theme).run()
     else:
         GameCLI(simulation).run()
 
