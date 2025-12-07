@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple
 
 Color = Tuple[int, int, int]
@@ -62,6 +62,17 @@ class Theme:
     # Прозрачность/эффекты
     OVERLAY_ALPHA: int = 170
     HOVER_BORDER: Color = (255, 255, 255)
+
+    # Цвета для ролей сотрудников
+    role_colors: dict[str, Color] = field(
+        default_factory=lambda: {
+            "programmer": (86, 156, 214),  # синий
+            "designer": (92, 184, 115),  # зеленый
+            "artist": (199, 134, 203),  # розово-фиолетовый
+            "sound": (243, 156, 92),  # оранжевый
+            "producer": (193, 165, 79),  # золотистый
+        }
+    )
 
     def as_dict(self) -> dict:
         """Отладочное представление темы в виде словаря."""
