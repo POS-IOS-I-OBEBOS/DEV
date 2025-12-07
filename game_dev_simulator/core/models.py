@@ -19,6 +19,9 @@ class Employee:
     salary: int
     fatigue: int = 0
 
+    # Используем хеш по идентичности, чтобы объекты можно было безопасно класть в словари UI
+    __hash__ = object.__hash__
+
     def work_on_task(self, fatigue_increase: int = 10) -> Dict[str, float]:
         """Выполняет задачу и возвращает вклад по направлениям.
 

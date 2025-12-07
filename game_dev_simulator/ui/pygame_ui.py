@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from random import randint
 from typing import Callable, Dict, List, Optional, Tuple
 
 import pygame
@@ -190,26 +191,77 @@ class OfficeView:
         self.avatar_slots: List[Tuple[pygame.Rect, int]] = []
         self.selected_employee: Optional[int] = None
 
+        # Позиции для плавного движения сотрудников в офисе
+        self.employee_positions: Dict[Employee, pygame.Vector2] = {}
+        self.employee_target_positions: Dict[Employee, pygame.Vector2] = {}
+        self.employee_home_positions: Dict[Employee, pygame.Vector2] = {}
+        self.employee_state: Dict[Employee, str] = {}
+        self.employee_timers: Dict[Employee, float] = {}
+        self.rest_change_interval = 3.0
+        self.move_speed = 130.0  # пикселей в секунду
+
+        self._ensure_positions()  # первичная раскладка рабочих мест
+
     def set_selected_employee(self, idx: Optional[int]) -> None:
         """Синхронизирует выделение с панелью сотрудников."""
 
         self.selected_employee = idx
 
-    def update(self, dt: float) -> None:  # noqa: ARG002 - оставлено для будущих анимаций
-        """Место под будущие анимации (мигание, плавные перемещения)."""
+    def update(self, dt: float) -> None:
+        """Плавно двигаем аватары к таргетам и переключаем состояния отдыха/работы."""
+
+        self._ensure_positions()
+
+        zones = self._role_zone()
+        rest_zone = zones["rest"]
+        rest_slots = self._layout_positions(rest_zone, max(1, len(self.simulation.studio.employees)))
+
+        for idx, emp in enumerate(self.simulation.studio.employees):
+            state = self.employee_state.get(emp, "working")
+            timer = self.employee_timers.get(emp, 0.0) + dt
+            self.employee_timers[emp] = timer
+
+            # Отправляем сильно уставших сотрудников отдыхать раз в несколько секунд
+            if state == "working" and emp.fatigue > 80 and timer >= self.rest_change_interval:
+                self.employee_state[emp] = "resting"
+                self.employee_timers[emp] = 0.0
+                target = rest_slots[idx % len(rest_slots)]
+                self.employee_target_positions[emp] = pygame.Vector2(target)
+            # Возвращаем бодрых сотрудников за столы
+            elif state == "resting" and emp.fatigue < 30 and timer >= self.rest_change_interval:
+                self.employee_state[emp] = "working"
+                self.employee_timers[emp] = 0.0
+                self.employee_target_positions[emp] = self.employee_home_positions.get(
+                    emp, self.employee_target_positions.get(emp, pygame.Vector2(rest_zone.center))
+                )
+
+            # Плавное перемещение к целевой точке
+            pos = self.employee_positions.get(emp, pygame.Vector2(rest_zone.center))
+            target = self.employee_target_positions.get(emp, pos)
+            direction = target - pos
+            distance = direction.length()
+            if distance > 0:
+                direction.scale_to_length(min(distance, self.move_speed * dt))
+                pos += direction
+                self.employee_positions[emp] = pos
 
     def _role_zone(self) -> Dict[str, pygame.Rect]:
-        """Возвращает расположение зон офиса для разных ролей."""
+        """Возвращает расположение зон офиса для разных ролей и отдыха."""
 
         pad = self.theme.PANEL_PADDING
         inner = self.rect.inflate(-pad * 2, -pad * 2)
         zone_height = inner.height // 3
+        rest_height = max(80, int(zone_height * 0.8))
+        # Основные рабочие зоны: программисты, дизайн/арт, звук/продюсеры
         return {
             "programmer": pygame.Rect(inner.x, inner.y, inner.width, zone_height),
-            "designer": pygame.Rect(inner.x, inner.y + zone_height, inner.width, zone_height),
-            "artist": pygame.Rect(inner.x, inner.y + zone_height, inner.width, zone_height),
-            "sound": pygame.Rect(inner.x, inner.y + zone_height * 2, inner.width // 2, zone_height),
-            "producer": pygame.Rect(inner.x + inner.width // 2, inner.y + zone_height * 2, inner.width // 2, zone_height),
+            "designer": pygame.Rect(inner.x, inner.y + zone_height, inner.width // 2, zone_height),
+            "artist": pygame.Rect(inner.x + inner.width // 2, inner.y + zone_height, inner.width // 2, zone_height),
+            "sound": pygame.Rect(inner.x, inner.y + zone_height * 2, inner.width // 2, zone_height - rest_height // 2),
+            "producer": pygame.Rect(
+                inner.x + inner.width // 2, inner.y + zone_height * 2, inner.width // 2, zone_height - rest_height // 2
+            ),
+            "rest": pygame.Rect(inner.x, inner.bottom - rest_height, inner.width, rest_height),
         }
 
     def _role_label(self, role: str) -> str:
@@ -247,6 +299,46 @@ class OfficeView:
                 idx += 1
         return positions
 
+    def _ensure_positions(self) -> None:
+        """Подбираем рабочие места и таргеты для всех сотрудников."""
+
+        zones = self._role_zone()
+        role_buckets: Dict[str, List[Employee]] = {}
+        for emp in self.simulation.studio.employees:
+            role_buckets.setdefault(emp.role, []).append(emp)
+
+        # Раскладываем сотрудников по рабочим зонам и сохраняем "домашние" позиции
+        for role, emps in role_buckets.items():
+            zone = zones.get(role, self.rect)
+            positions = self._layout_positions(zone, len(emps))
+            for emp, pos in zip(emps, positions):
+                home_vec = pygame.Vector2(pos)
+                if emp not in self.employee_home_positions:
+                    # Небольшой сдвиг, чтобы аватары выглядели живее
+                    jitter = pygame.Vector2(randint(-6, 6), randint(-6, 6))
+                    self.employee_home_positions[emp] = home_vec + jitter
+                if emp not in self.employee_positions:
+                    self.employee_positions[emp] = self.employee_home_positions[emp]
+                if emp not in self.employee_target_positions:
+                    self.employee_target_positions[emp] = self.employee_home_positions[emp]
+                if emp not in self.employee_state:
+                    self.employee_state[emp] = "working"
+                if emp not in self.employee_timers:
+                    self.employee_timers[emp] = 0.0
+
+        # Удаляем записи для уволенных сотрудников
+        alive = set(self.simulation.studio.employees)
+        for mapping in (
+            self.employee_positions,
+            self.employee_target_positions,
+            self.employee_home_positions,
+            self.employee_state,
+            self.employee_timers,
+        ):
+            for emp in list(mapping.keys()):
+                if emp not in alive:
+                    mapping.pop(emp, None)
+
     def draw(self, surface: pygame.Surface) -> None:
         """Рисуем фон офиса, зоны и аватары сотрудников."""
 
@@ -268,11 +360,10 @@ class OfficeView:
         # Раскладываем аватары по ролям
         for role, emps in role_buckets.items():
             zone = zones.get(role, self.rect)
-            positions = self._layout_positions(zone, len(emps))
-            for emp, pos in zip(emps, positions):
+            for emp in emps:
                 color = self._avatar_color(emp.fatigue)
                 avatar_rect = pygame.Rect(0, 0, 28, 28)
-                avatar_rect.center = pos
+                avatar_rect.center = self.employee_positions.get(emp, pygame.Vector2(zone.center))
                 pygame.draw.circle(surface, color, avatar_rect.center, 14)
                 pygame.draw.circle(surface, self.theme.PANEL_DARK, avatar_rect.center, 14, width=2)
 
@@ -282,9 +373,17 @@ class OfficeView:
 
                 font = pygame.font.SysFont(self.theme.FONT_NAME, self.theme.FONT_SIZE - 2)
                 name_text = font.render(emp.name, True, self.theme.TEXT)
-                role_text = font.render(emp.role, True, self.theme.SUBTEXT)
+                project = self.get_employee_project(emp)
+                if self.employee_state.get(emp) == "resting":
+                    status_line = "Отдыхает"
+                elif project:
+                    status_line = f"Работает над {project.title}"
+                else:
+                    status_line = emp.role
+
+                status_text = font.render(status_line, True, self.theme.SUBTEXT)
                 surface.blit(name_text, (avatar_rect.centerx + 18, avatar_rect.centery - 10))
-                surface.blit(role_text, (avatar_rect.centerx + 18, avatar_rect.centery + 6))
+                surface.blit(status_text, (avatar_rect.centerx + 18, avatar_rect.centery + 6))
 
                 self.avatar_slots.append((avatar_rect, self.simulation.studio.employees.index(emp)))
 
@@ -295,6 +394,14 @@ class OfficeView:
             if rect.collidepoint(pos):
                 self.selected_employee = idx
                 return idx
+        return None
+
+    def get_employee_project(self, employee: Employee) -> Optional[GameProject]:
+        """Ищем проект, к которому закреплён сотрудник (для подписи статуса)."""
+
+        for project in self.simulation.studio.projects:
+            if employee in project.assigned_employees:
+                return project
         return None
 
 
@@ -398,7 +505,7 @@ class GamePygameUI:
                 self.auto_timer = 0.0
                 self._do_next_week()
 
-        # Обновляем будущие анимации офиса
+        # Обновляем анимации офиса (движение аватаров, смена состояний)
         self.office_view.update(dt)
 
     # Рисование ----------------------------------------------------------
@@ -600,7 +707,7 @@ class GamePygameUI:
     # Обработчики --------------------------------------------------------
     def handle_mouse_click(self, pos: Tuple[int, int]) -> None:
         # Клик внутри сцены офиса: выбираем сотрудника по аватару
-        if self.office_rect_base.collidepoint(pos):
+        if self.office_view.rect.collidepoint(pos):
             idx = self.office_view.handle_click(pos)
             if idx is not None:
                 self.selected_employee = idx
