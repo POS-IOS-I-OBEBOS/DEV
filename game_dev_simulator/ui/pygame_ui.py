@@ -180,6 +180,124 @@ class EmployeeDialog(ModalDialog):
         super().__init__("Новый сотрудник", fields, on_submit, theme)
 
 
+class OfficeView:
+    """Простая 2D-сцена офиса со схематичными зонами и аватарами сотрудников."""
+
+    def __init__(self, rect: pygame.Rect, simulation: GameSimulation, theme: Theme) -> None:
+        self.rect = rect
+        self.simulation = simulation
+        self.theme = theme
+        self.avatar_slots: List[Tuple[pygame.Rect, int]] = []
+        self.selected_employee: Optional[int] = None
+
+    def set_selected_employee(self, idx: Optional[int]) -> None:
+        """Синхронизирует выделение с панелью сотрудников."""
+
+        self.selected_employee = idx
+
+    def update(self, dt: float) -> None:  # noqa: ARG002 - оставлено для будущих анимаций
+        """Место под будущие анимации (мигание, плавные перемещения)."""
+
+    def _role_zone(self) -> Dict[str, pygame.Rect]:
+        """Возвращает расположение зон офиса для разных ролей."""
+
+        pad = self.theme.PANEL_PADDING
+        inner = self.rect.inflate(-pad * 2, -pad * 2)
+        zone_height = inner.height // 3
+        return {
+            "programmer": pygame.Rect(inner.x, inner.y, inner.width, zone_height),
+            "designer": pygame.Rect(inner.x, inner.y + zone_height, inner.width, zone_height),
+            "artist": pygame.Rect(inner.x, inner.y + zone_height, inner.width, zone_height),
+            "sound": pygame.Rect(inner.x, inner.y + zone_height * 2, inner.width // 2, zone_height),
+            "producer": pygame.Rect(inner.x + inner.width // 2, inner.y + zone_height * 2, inner.width // 2, zone_height),
+        }
+
+    def _role_label(self, role: str) -> str:
+        return {
+            "programmer": "Зона программистов",
+            "designer": "Дизайн / арт",
+            "artist": "Дизайн / арт",
+            "sound": "Студия звука",
+            "producer": "Продюсерская",
+        }.get(role, "Офис")
+
+    def _avatar_color(self, fatigue: float) -> Tuple[int, int, int]:
+        if fatigue > 70:
+            return self.theme.ERROR
+        if fatigue > 30:
+            return self.theme.WARNING
+        return self.theme.SUCCESS
+
+    def _layout_positions(self, zone: pygame.Rect, count: int) -> List[Tuple[int, int]]:
+        """Располагаем аватары сеткой внутри зоны."""
+
+        positions: List[Tuple[int, int]] = []
+        cols = max(1, min(5, zone.width // 120))
+        spacing_x = zone.width // (cols + 1)
+        rows = (count + cols - 1) // cols
+        spacing_y = max(60, zone.height // (rows + 1))
+        idx = 0
+        for r in range(rows):
+            y = zone.y + spacing_y * (r + 1)
+            for c in range(cols):
+                if idx >= count:
+                    break
+                x = zone.x + spacing_x * (c + 1)
+                positions.append((x, y))
+                idx += 1
+        return positions
+
+    def draw(self, surface: pygame.Surface) -> None:
+        """Рисуем фон офиса, зоны и аватары сотрудников."""
+
+        pygame.draw.rect(surface, self.theme.PANEL_DARK, self.rect, border_radius=12)
+
+        zones = self._role_zone()
+        self.avatar_slots.clear()
+        role_buckets: Dict[str, List[Employee]] = {}
+        for emp in self.simulation.studio.employees:
+            role_buckets.setdefault(emp.role, []).append(emp)
+
+        # Рисуем зоны
+        for role, zone in zones.items():
+            pygame.draw.rect(surface, self.theme.PANEL, zone, border_radius=10)
+            label = self._role_label(role)
+            font = pygame.font.SysFont(self.theme.FONT_NAME, self.theme.FONT_SIZE)
+            surface.blit(font.render(label, True, self.theme.SUBTEXT), (zone.x + 8, zone.y + 6))
+
+        # Раскладываем аватары по ролям
+        for role, emps in role_buckets.items():
+            zone = zones.get(role, self.rect)
+            positions = self._layout_positions(zone, len(emps))
+            for emp, pos in zip(emps, positions):
+                color = self._avatar_color(emp.fatigue)
+                avatar_rect = pygame.Rect(0, 0, 28, 28)
+                avatar_rect.center = pos
+                pygame.draw.circle(surface, color, avatar_rect.center, 14)
+                pygame.draw.circle(surface, self.theme.PANEL_DARK, avatar_rect.center, 14, width=2)
+
+                if self.selected_employee is not None and 0 <= self.selected_employee < len(self.simulation.studio.employees):
+                    if self.simulation.studio.employees[self.selected_employee] is emp:
+                        pygame.draw.circle(surface, self.theme.ACCENT, avatar_rect.center, 17, width=2)
+
+                font = pygame.font.SysFont(self.theme.FONT_NAME, self.theme.FONT_SIZE - 2)
+                name_text = font.render(emp.name, True, self.theme.TEXT)
+                role_text = font.render(emp.role, True, self.theme.SUBTEXT)
+                surface.blit(name_text, (avatar_rect.centerx + 18, avatar_rect.centery - 10))
+                surface.blit(role_text, (avatar_rect.centerx + 18, avatar_rect.centery + 6))
+
+                self.avatar_slots.append((avatar_rect, self.simulation.studio.employees.index(emp)))
+
+    def handle_click(self, pos: Tuple[int, int]) -> Optional[int]:
+        """Возвращает индекс сотрудника при клике по аватару."""
+
+        for rect, idx in self.avatar_slots:
+            if rect.collidepoint(pos):
+                self.selected_employee = idx
+                return idx
+        return None
+
+
 class GamePygameUI:
     """Красивый дашборд на pygame поверх GameSimulation."""
 
@@ -199,8 +317,13 @@ class GamePygameUI:
         self.auto_timer = 0.0
         self.auto_interval = 1.5
         self.employees_scroll = 0
-        self.projects_scroll = 0
         self.running = True
+        center_x = int(self.theme.WINDOW_WIDTH * 0.3)
+        center_w = int(self.theme.WINDOW_WIDTH * 0.4)
+        center_h = self.theme.WINDOW_HEIGHT - self.theme.STATUS_HEIGHT - self.theme.LOG_HEIGHT
+        center_rect = pygame.Rect(center_x, self.theme.STATUS_HEIGHT, center_w, center_h)
+        self.office_rect_base = center_rect
+        self.office_view = OfficeView(center_rect.copy(), self.simulation, self.theme)
 
     # Основной цикл ------------------------------------------------------
     def run(self) -> None:
@@ -249,10 +372,8 @@ class GamePygameUI:
                     self.handle_mouse_click(event.pos)
                 elif event.button == 4:  # scroll up
                     self.employees_scroll = min(self.employees_scroll + self.theme.SCROLL_STEP, 0)
-                    self.projects_scroll = min(self.projects_scroll + self.theme.SCROLL_STEP, 0)
                 elif event.button == 5:  # scroll down
                     self.employees_scroll -= self.theme.SCROLL_STEP
-                    self.projects_scroll -= self.theme.SCROLL_STEP
 
     def update(self, dt: float) -> None:
         # Обновляем возраст сообщений лога для легкого затухания
@@ -277,12 +398,15 @@ class GamePygameUI:
                 self.auto_timer = 0.0
                 self._do_next_week()
 
+        # Обновляем будущие анимации офиса
+        self.office_view.update(dt)
+
     # Рисование ----------------------------------------------------------
     def draw(self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font) -> None:
         surface.fill(self.theme.BG)
         self.draw_status_bar(surface, font, title_font)
         self.draw_employees_panel(surface, font, title_font)
-        self.draw_projects_panel(surface, font, title_font)
+        self.draw_office(surface, font, title_font)
         self.draw_actions_panel(surface, font, title_font)
         self.draw_log_panel(surface, font)
         if self.dialog:
@@ -350,59 +474,50 @@ class GamePygameUI:
         fatigue_label = font.render(f"Усталость: {emp.fatigue}%", True, self.theme.SUBTEXT)
         surface.blit(fatigue_label, (bar_bg.x, bar_bg.y - 18))
 
-    def draw_projects_panel(self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font) -> None:
-        x = int(self.theme.WINDOW_WIDTH * 0.3)
-        width = int(self.theme.WINDOW_WIDTH * 0.4)
-        height = self.theme.WINDOW_HEIGHT - self.theme.STATUS_HEIGHT - self.theme.LOG_HEIGHT
-        panel_rect = pygame.Rect(x, self.theme.STATUS_HEIGHT, width, height)
-        pygame.draw.rect(surface, self.theme.PANEL_DARK, panel_rect)
+    def draw_office(self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font) -> None:
+        """Центральная сцена офиса с зонами и аватарами сотрудников."""
 
-        header = title_font.render("Проекты", True, self.theme.TEXT)
-        surface.blit(header, (panel_rect.x + self.theme.PANEL_PADDING, panel_rect.y + self.theme.PANEL_PADDING))
+        header = title_font.render("Офис", True, self.theme.TEXT)
+        surface.blit(header, (self.office_view.rect.x + self.theme.PANEL_PADDING, self.office_view.rect.y + self.theme.PANEL_PADDING))
 
-        self.project_slots.clear()
-        start_y = panel_rect.y + self.theme.PANEL_PADDING * 2 + header.get_height() + self.projects_scroll
-        card_height = 110
-        for idx, project in enumerate(self.simulation.studio.projects):
-            card_rect = pygame.Rect(
-                panel_rect.x + self.theme.PANEL_PADDING,
-                start_y + idx * (card_height + self.theme.CARD_PADDING),
-                width - self.theme.PANEL_PADDING * 2,
-                card_height,
-            )
-            if card_rect.bottom < panel_rect.y + self.theme.PANEL_PADDING or card_rect.y > panel_rect.bottom:
-                continue
-            self.draw_project_card(surface, font, project, card_rect, selected=idx == self.selected_project)
-            self.project_slots.append((card_rect, idx))
+        # Небольшая подпись под заголовком
+        sub = font.render("Наблюдайте за командой и кликайте по людям для выбора", True, self.theme.SUBTEXT)
+        surface.blit(sub, (self.office_view.rect.x + self.theme.PANEL_PADDING, self.office_view.rect.y + self.theme.PANEL_PADDING + header.get_height()))
 
-        if not self.simulation.studio.projects:
-            empty = font.render("Нет активных проектов", True, self.theme.SUBTEXT)
-            surface.blit(empty, (panel_rect.x + self.theme.PANEL_PADDING, panel_rect.y + 80))
+        # Область офиса под заголовком
+        office_area = self.office_rect_base.inflate(-self.theme.PANEL_PADDING * 1, -self.theme.PANEL_PADDING * 3)
+        office_area.y += header.get_height() + self.theme.PANEL_PADDING
+        office_area.height -= header.get_height() + self.theme.PANEL_PADDING
+        self.office_view.rect = office_area
 
-    def draw_project_card(self, surface: pygame.Surface, font: pygame.font.Font, project: GameProject, rect: pygame.Rect, *, selected: bool) -> None:
-        pygame.draw.rect(surface, self.theme.PANEL, rect, border_radius=10)
+        self.office_view.draw(surface)
+
+    def _draw_project_overview(self, surface: pygame.Surface, font: pygame.font.Font, project: GameProject, rect: pygame.Rect, *, selected: bool) -> None:
+        """Компактная карточка проекта в правой колонке действий."""
+
+        pygame.draw.rect(surface, self.theme.PANEL_DARK, rect, border_radius=8)
         if selected:
-            pygame.draw.rect(surface, self.theme.ACCENT, rect, width=2, border_radius=10)
+            pygame.draw.rect(surface, self.theme.ACCENT, rect, width=2, border_radius=8)
+
         title = font.render(project.title, True, self.theme.TEXT)
         meta = font.render(f"{project.genre} · {project.platform} · {project.status}", True, self.theme.SUBTEXT)
         surface.blit(title, (rect.x + self.theme.CARD_PADDING, rect.y + self.theme.CARD_PADDING))
-        surface.blit(meta, (rect.x + self.theme.CARD_PADDING, rect.y + self.theme.CARD_PADDING + 22))
+        surface.blit(meta, (rect.x + self.theme.CARD_PADDING, rect.y + self.theme.CARD_PADDING + 20))
 
-        # Прогресс-бар проекта
-        bar_bg = pygame.Rect(rect.x + self.theme.CARD_PADDING, rect.bottom - 32, rect.width - self.theme.CARD_PADDING * 2, 18)
+        bar_bg = pygame.Rect(rect.x + self.theme.CARD_PADDING, rect.bottom - 22, rect.width - self.theme.CARD_PADDING * 2, 12)
         pygame.draw.rect(surface, self.theme.PROGRESS_BG, bar_bg, border_radius=6)
         target = project.progress
         rendered = self.rendered_progress.get(id(project), target)
         width = int(bar_bg.width * min(1.0, rendered / 100))
-        bar_fg = pygame.Rect(bar_bg.x, bar_bg.y, width, bar_bg.height)
         color = self.theme.PROGRESS_ACTIVE
         if project.status == "released":
             color = self.theme.PROGRESS_RELEASED
         elif project.status == "cancelled":
             color = self.theme.PROGRESS_CANCELLED
-        pygame.draw.rect(surface, color, bar_fg, border_radius=6)
-        progress_label = font.render(f"Прогресс: {project.progress:.1f}%", True, self.theme.SUBTEXT)
-        surface.blit(progress_label, (bar_bg.x, bar_bg.y - 20))
+        pygame.draw.rect(surface, color, (bar_bg.x, bar_bg.y, width, bar_bg.height), border_radius=6)
+
+        progress_label = font.render(f"{project.progress:.1f}%", True, self.theme.SUBTEXT)
+        surface.blit(progress_label, (bar_bg.x, bar_bg.y - 18))
 
     def draw_actions_panel(self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font) -> None:
         x = int(self.theme.WINDOW_WIDTH * 0.7)
@@ -447,6 +562,23 @@ class GamePygameUI:
                 active=(button.text.startswith("Авто-симуляция") and self.auto_simulation_enabled),
             )
 
+        # Перечень проектов под кнопками
+        y += self.theme.PANEL_PADDING
+        header_projects = font.render("Текущие проекты", True, self.theme.TEXT)
+        surface.blit(header_projects, (panel_rect.x + self.theme.PANEL_PADDING, y))
+        y += header_projects.get_height() + self.theme.PANEL_PADDING
+        self.project_slots.clear()
+        card_height = 82
+        for idx, project in enumerate(self.simulation.studio.projects):
+            card_rect = pygame.Rect(panel_rect.x + self.theme.PANEL_PADDING, y, btn_width, card_height)
+            self._draw_project_overview(surface, font, project, card_rect, selected=idx == self.selected_project)
+            self.project_slots.append((card_rect, idx))
+            y += card_height + self.theme.CARD_PADDING
+
+        if not self.simulation.studio.projects:
+            empty = font.render("Нет активных проектов", True, self.theme.SUBTEXT)
+            surface.blit(empty, (panel_rect.x + self.theme.PANEL_PADDING, y))
+
     def draw_log_panel(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
         rect = pygame.Rect(0, self.theme.WINDOW_HEIGHT - self.theme.LOG_HEIGHT, self.theme.WINDOW_WIDTH, self.theme.LOG_HEIGHT)
         pygame.draw.rect(surface, self.theme.LOG_BG, rect)
@@ -467,9 +599,18 @@ class GamePygameUI:
 
     # Обработчики --------------------------------------------------------
     def handle_mouse_click(self, pos: Tuple[int, int]) -> None:
+        # Клик внутри сцены офиса: выбираем сотрудника по аватару
+        if self.office_rect_base.collidepoint(pos):
+            idx = self.office_view.handle_click(pos)
+            if idx is not None:
+                self.selected_employee = idx
+                self.office_view.set_selected_employee(idx)
+            return
+
         for rect, idx in self.employee_slots:
             if rect.collidepoint(pos):
                 self.selected_employee = idx
+                self.office_view.set_selected_employee(idx)
                 return
         for rect, idx in self.project_slots:
             if rect.collidepoint(pos):
@@ -568,6 +709,7 @@ class GamePygameUI:
             self.rendered_progress.clear()
             self.selected_employee = None
             self.selected_project = None
+            self.office_view.simulation = self.simulation
             self.add_log_message("Сохранение загружено")
         except FileNotFoundError:
             self.add_log_message("Сохранение не найдено")
@@ -576,4 +718,4 @@ class GamePygameUI:
         self.running = False
 
 
-__all__ = ["GamePygameUI", "UIButton", "ModalDialog", "ProjectDialog", "EmployeeDialog"]
+__all__ = ["GamePygameUI", "UIButton", "ModalDialog", "ProjectDialog", "EmployeeDialog", "OfficeView"]
