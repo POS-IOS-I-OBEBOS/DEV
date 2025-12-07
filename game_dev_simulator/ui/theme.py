@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
-from typing import Tuple
+from pathlib import Path
+from typing import Dict, Tuple
+
+import pygame
 
 Color = Tuple[int, int, int]
 
 
-@dataclass(frozen=True)
+@dataclass
 class Theme:
     """Набор цветов и констант для UI.
 
@@ -74,6 +78,9 @@ class Theme:
         }
     )
 
+    # Загруженные иконки сотрудников по ролям
+    employee_icons: Dict[str, pygame.Surface] = field(default_factory=dict, compare=False)
+
     def as_dict(self) -> dict:
         """Отладочное представление темы в виде словаря."""
 
@@ -82,4 +89,28 @@ class Theme:
 
 DEFAULT_THEME = Theme()
 
-__all__ = ["Theme", "DEFAULT_THEME", "Color"]
+
+def load_employee_icons(path: str | os.PathLike[str]) -> Dict[str, pygame.Surface]:
+    """Загружает иконки сотрудников по ролям из указанной папки.
+
+    Если файл не найден, просто пропускаем его, чтобы UI мог
+    использовать примитивные спрайты вместо иконок.
+    """
+
+    icons: Dict[str, pygame.Surface] = {}
+    base_path = Path(path)
+    for role in ["programmer", "designer", "artist", "sound", "producer"]:
+        file_path = base_path / f"{role}.png"
+        try:
+            image = pygame.image.load(file_path).convert_alpha()
+        except FileNotFoundError:
+            # Нет иконки для роли — не считаем это ошибкой
+            continue
+        except Exception as exc:  # pragma: no cover - диагностическое предупреждение
+            print(f"[icons] Не удалось загрузить {file_path}: {exc}")
+            continue
+        icons[role] = image
+    return icons
+
+
+__all__ = ["Theme", "DEFAULT_THEME", "Color", "load_employee_icons"]

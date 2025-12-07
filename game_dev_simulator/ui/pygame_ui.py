@@ -7,16 +7,17 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 import math
 from random import randint
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import pygame
 
 from game_dev_simulator.core import Employee, GameProject, GameSimulation
 from game_dev_simulator.save.storage import load_game, save_game
-from game_dev_simulator.ui.theme import DEFAULT_THEME, Theme
+from game_dev_simulator.ui.theme import DEFAULT_THEME, Theme, load_employee_icons
 
 
 @dataclass
@@ -185,7 +186,13 @@ class EmployeeDialog(ModalDialog):
 class EmployeeSprite:
     """Мини-спрайт сотрудника с плавным движением и подсветкой по усталости."""
 
-    def __init__(self, employee: Employee, pos: pygame.Vector2, base_color: Tuple[int, int, int]) -> None:
+    def __init__(
+        self,
+        employee: Employee,
+        pos: pygame.Vector2,
+        base_color: Tuple[int, int, int],
+        icon_surface: Optional[pygame.Surface] = None,
+    ) -> None:
         self.employee = employee
         self.pos = pygame.Vector2(pos)
         self.target_pos = pygame.Vector2(pos)
@@ -194,6 +201,7 @@ class EmployeeSprite:
         self.base_color = base_color
         self.selected = False
         self.anim_time = 0.0
+        self.icon_surface = icon_surface
 
     def update(self, dt: float, speed: float = 150.0) -> None:
         """Плавное движение к целевой точке и накопление времени анимации."""
@@ -223,53 +231,61 @@ class EmployeeSprite:
         """Рисуем мини-спрайт: голова, тело, руки и ноги с подсветкой выделения."""
 
         aura_color = self._aura_color(theme)
-        body_color = self.base_color
-        limb_color = tuple(min(255, c + 30) for c in self.base_color)
-
-        # Подпрыгивание головы, когда сотрудник работает
-        work_bounce = 0.0
-        if self.state == "working":
-            work_bounce = math.sin(self.anim_time * 6) * 2
-
         x, y = int(self.pos.x), int(self.pos.y)
-        head_radius = 10
-        body_width = 22
-        body_height = 26
 
-        # Подложка подсветки выбранного персонажа
         sprite_rect = self.get_rect()
         if self.selected:
             pygame.draw.rect(surface, aura_color, sprite_rect.inflate(10, 10), width=2, border_radius=8)
 
-        # Ноги
-        leg_height = 10
-        leg_width = 6
-        left_leg = pygame.Rect(x - 6, y + body_height // 2, leg_width, leg_height)
-        right_leg = pygame.Rect(x + 2, y + body_height // 2, leg_width, leg_height)
-        pygame.draw.rect(surface, body_color, left_leg, border_radius=3)
-        pygame.draw.rect(surface, body_color, right_leg, border_radius=3)
+        if self.icon_surface:
+            # Отрисовываем PNG-иконку роли с подсветкой усталости
+            icon_size = 48
+            scaled = pygame.transform.smoothscale(self.icon_surface, (icon_size, icon_size))
+            icon_rect = scaled.get_rect(center=(x, y))
+            pygame.draw.rect(surface, aura_color, icon_rect.inflate(6, 6), width=2, border_radius=8)
+            surface.blit(scaled, icon_rect)
+        else:
+            body_color = self.base_color
+            limb_color = tuple(min(255, c + 30) for c in self.base_color)
 
-        # Тело
-        body_rect = pygame.Rect(x - body_width // 2, y - body_height // 2, body_width, body_height)
-        pygame.draw.rect(surface, body_color, body_rect, border_radius=6)
+            # Подпрыгивание головы, когда сотрудник работает
+            work_bounce = 0.0
+            if self.state == "working":
+                work_bounce = math.sin(self.anim_time * 6) * 2
 
-        # Руки
-        arm_height = 6
-        arm_width = 12
-        left_arm = pygame.Rect(body_rect.x - arm_width + 2, y - arm_height // 2, arm_width, arm_height)
-        right_arm = pygame.Rect(body_rect.right - 2, y - arm_height // 2, arm_width, arm_height)
-        pygame.draw.rect(surface, limb_color, left_arm, border_radius=3)
-        pygame.draw.rect(surface, limb_color, right_arm, border_radius=3)
+            head_radius = 10
+            body_width = 22
+            body_height = 26
 
-        # Голова
-        head_center = (x, y - body_height // 2 - head_radius + int(work_bounce))
-        pygame.draw.circle(surface, limb_color, head_center, head_radius)
-        pygame.draw.circle(surface, aura_color, head_center, head_radius, width=2)
+            # Ноги
+            leg_height = 10
+            leg_width = 6
+            left_leg = pygame.Rect(x - 6, y + body_height // 2, leg_width, leg_height)
+            right_leg = pygame.Rect(x + 2, y + body_height // 2, leg_width, leg_height)
+            pygame.draw.rect(surface, body_color, left_leg, border_radius=3)
+            pygame.draw.rect(surface, body_color, right_leg, border_radius=3)
 
-        # Статус отдыха
-        if self.state == "resting":
-            rest_label = font.render("☕", True, theme.TEXT)
-            surface.blit(rest_label, (x - 6, y + body_height // 2 + 4))
+            # Тело
+            body_rect = pygame.Rect(x - body_width // 2, y - body_height // 2, body_width, body_height)
+            pygame.draw.rect(surface, body_color, body_rect, border_radius=6)
+
+            # Руки
+            arm_height = 6
+            arm_width = 12
+            left_arm = pygame.Rect(body_rect.x - arm_width + 2, y - arm_height // 2, arm_width, arm_height)
+            right_arm = pygame.Rect(body_rect.right - 2, y - arm_height // 2, arm_width, arm_height)
+            pygame.draw.rect(surface, limb_color, left_arm, border_radius=3)
+            pygame.draw.rect(surface, limb_color, right_arm, border_radius=3)
+
+            # Голова
+            head_center = (x, y - body_height // 2 - head_radius + int(work_bounce))
+            pygame.draw.circle(surface, limb_color, head_center, head_radius)
+            pygame.draw.circle(surface, aura_color, head_center, head_radius, width=2)
+
+            # Статус отдыха
+            if self.state == "resting":
+                rest_label = font.render("☕", True, theme.TEXT)
+                surface.blit(rest_label, (x - 6, y + body_height // 2 + 4))
 
         # Имя и роль над персонажем
         role_icon = {
@@ -294,9 +310,14 @@ class EmployeeSprite:
     def get_rect(self) -> pygame.Rect:
         """Габариты спрайта для хит-теста кликов."""
 
-        width = 40
-        height = 60
-        return pygame.Rect(int(self.pos.x - width // 2), int(self.pos.y - height // 2), width, height)
+        icon_size = 52 if self.icon_surface else 40
+        height = 60 if not self.icon_surface else 60
+        return pygame.Rect(
+            int(self.pos.x - icon_size // 2),
+            int(self.pos.y - height // 2),
+            icon_size,
+            height,
+        )
 
 
 class OfficeView:
@@ -411,13 +432,19 @@ class OfficeView:
                 sprite = self.employee_sprites.get(emp)
                 home_pos = pygame.Vector2(pos) + pygame.Vector2(randint(-6, 6), randint(-6, 6))
                 if not sprite:
-                    sprite = EmployeeSprite(emp, home_pos, base_color)
+                    sprite = EmployeeSprite(
+                        emp,
+                        home_pos,
+                        base_color,
+                        icon_surface=self.theme.employee_icons.get(emp.role),
+                    )
                     self.employee_sprites[emp] = sprite
                 sprite.home_pos = home_pos
                 # Если персонаж работает — тянем обратно к рабочему месту
                 if sprite.state == "working":
                     sprite.target_pos = pygame.Vector2(sprite.home_pos)
                 sprite.base_color = base_color
+                sprite.icon_surface = self.theme.employee_icons.get(emp.role)
 
         # Чистим данные уволенных сотрудников
         alive = set(self.simulation.studio.employees)
@@ -465,8 +492,16 @@ class GamePygameUI:
     """Красивый дашборд на pygame поверх GameSimulation."""
 
     def __init__(self, simulation: GameSimulation, theme: Theme | None = None) -> None:
+        # Инициализируем pygame заранее, чтобы можно было грузить ресурсы (иконки)
+        pygame.init()
+
         self.simulation = simulation
         self.theme = theme or DEFAULT_THEME
+        # Загружаем иконки сотрудников, если они доступны
+        assets_root = Path(__file__).resolve().parents[2] / "assets" / "employee_icons"
+        package_assets = Path(__file__).resolve().parent.parent / "assets" / "employee_icons"
+        icons_path = assets_root if assets_root.exists() else package_assets
+        self.theme.employee_icons = load_employee_icons(icons_path) if icons_path.exists() else {}
         self.employee_slots: List[Tuple[pygame.Rect, int]] = []
         self.project_slots: List[Tuple[pygame.Rect, int]] = []
         self.center_project_slots: List[Tuple[pygame.Rect, int]] = []
