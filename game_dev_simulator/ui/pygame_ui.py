@@ -413,8 +413,11 @@ class GamePygameUI:
         self.theme = theme or DEFAULT_THEME
         self.employee_slots: List[Tuple[pygame.Rect, int]] = []
         self.project_slots: List[Tuple[pygame.Rect, int]] = []
+        self.center_project_slots: List[Tuple[pygame.Rect, int]] = []
         self.selected_employee: Optional[int] = None
         self.selected_project: Optional[int] = None
+        self.center_mode: str = "office"
+        self.center_tabs: List[Tuple[pygame.Rect, str]] = []
         self.buttons: List[UIButton] = []
         self.dialog: Optional[ModalDialog] = None
         self.logs: List[Dict[str, float | str]] = []
@@ -513,7 +516,7 @@ class GamePygameUI:
         surface.fill(self.theme.BG)
         self.draw_status_bar(surface, font, title_font)
         self.draw_employees_panel(surface, font, title_font)
-        self.draw_office(surface, font, title_font)
+        self.draw_center(surface, font, title_font)
         self.draw_actions_panel(surface, font, title_font)
         self.draw_log_panel(surface, font)
         if self.dialog:
@@ -581,23 +584,83 @@ class GamePygameUI:
         fatigue_label = font.render(f"Усталость: {emp.fatigue}%", True, self.theme.SUBTEXT)
         surface.blit(fatigue_label, (bar_bg.x, bar_bg.y - 18))
 
-    def draw_office(self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font) -> None:
+    def draw_center(self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font) -> None:
+        """Центральная зона с переключаемым видом: офис или проекты."""
+
+        area = self.office_rect_base
+        pygame.draw.rect(surface, self.theme.PANEL, area)
+
+        # Вкладки над центральной областью
+        tab_height = self.theme.BUTTON_HEIGHT
+        tab_width = 130
+        tab_y = area.y + self.theme.PANEL_PADDING
+        tab_x = area.x + self.theme.PANEL_PADDING
+        tabs = [("office", "Офис"), ("projects", "Проекты")]
+        self.center_tabs.clear()
+        mouse_pos = pygame.mouse.get_pos()
+        for idx, (mode, label) in enumerate(tabs):
+            rect = pygame.Rect(tab_x + idx * (tab_width + self.theme.PANEL_PADDING), tab_y, tab_width, tab_height)
+            active = self.center_mode == mode
+            hovered = rect.collidepoint(mouse_pos)
+            bg = self.theme.BUTTON_BG_ACTIVE if active else (self.theme.BUTTON_BG_HOVER if hovered else self.theme.BUTTON_BG)
+            pygame.draw.rect(surface, bg, rect, border_radius=10)
+            pygame.draw.rect(surface, self.theme.ACCENT if active else self.theme.PANEL_DARK, rect, width=2, border_radius=10)
+            text_surf = font.render(label, True, self.theme.TEXT)
+            surface.blit(text_surf, text_surf.get_rect(center=rect.center))
+            self.center_tabs.append((rect, mode))
+
+        content_rect = area.inflate(-self.theme.PANEL_PADDING * 2, -self.theme.PANEL_PADDING * 3)
+        content_rect.y = tab_y + tab_height + self.theme.PANEL_PADDING
+        content_rect.height = area.bottom - content_rect.y - self.theme.PANEL_PADDING
+
+        if self.center_mode == "office":
+            self.draw_office(surface, font, title_font, content_rect)
+        else:
+            self.draw_projects_center(surface, font, title_font, content_rect)
+
+    def draw_office(
+        self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font, content_rect: pygame.Rect
+    ) -> None:
         """Центральная сцена офиса с зонами и аватарами сотрудников."""
 
         header = title_font.render("Офис", True, self.theme.TEXT)
-        surface.blit(header, (self.office_view.rect.x + self.theme.PANEL_PADDING, self.office_view.rect.y + self.theme.PANEL_PADDING))
+        surface.blit(header, (content_rect.x, content_rect.y))
 
         # Небольшая подпись под заголовком
         sub = font.render("Наблюдайте за командой и кликайте по людям для выбора", True, self.theme.SUBTEXT)
-        surface.blit(sub, (self.office_view.rect.x + self.theme.PANEL_PADDING, self.office_view.rect.y + self.theme.PANEL_PADDING + header.get_height()))
+        surface.blit(sub, (content_rect.x, content_rect.y + header.get_height() + 6))
 
-        # Область офиса под заголовком
-        office_area = self.office_rect_base.inflate(-self.theme.PANEL_PADDING * 1, -self.theme.PANEL_PADDING * 3)
-        office_area.y += header.get_height() + self.theme.PANEL_PADDING
-        office_area.height -= header.get_height() + self.theme.PANEL_PADDING
+        office_area = content_rect.inflate(0, -header.get_height() - self.theme.PANEL_PADDING * 2)
+        office_area.y = content_rect.y + header.get_height() + self.theme.PANEL_PADDING * 2
         self.office_view.rect = office_area
 
         self.office_view.draw(surface)
+
+    def draw_projects_center(
+        self, surface: pygame.Surface, font: pygame.font.Font, title_font: pygame.font.Font, content_rect: pygame.Rect
+    ) -> None:
+        """Отображение списка проектов в центральной области."""
+
+        header = title_font.render("Проекты", True, self.theme.TEXT)
+        surface.blit(header, (content_rect.x, content_rect.y))
+        sub = font.render("Прогресс и статус активных игр", True, self.theme.SUBTEXT)
+        surface.blit(sub, (content_rect.x, content_rect.y + header.get_height() + 6))
+
+        list_rect = content_rect.inflate(-self.theme.PANEL_PADDING, -header.get_height() - self.theme.PANEL_PADDING * 3)
+        list_rect.y = content_rect.y + header.get_height() + self.theme.PANEL_PADDING * 2
+
+        self.center_project_slots.clear()
+        y = list_rect.y
+        card_height = 96
+        for idx, project in enumerate(self.simulation.studio.projects):
+            rect = pygame.Rect(list_rect.x, y, list_rect.width, card_height)
+            self._draw_project_overview(surface, font, project, rect, selected=idx == self.selected_project)
+            self.center_project_slots.append((rect, idx))
+            y += card_height + self.theme.CARD_PADDING
+
+        if not self.simulation.studio.projects:
+            empty = font.render("Нет активных проектов", True, self.theme.SUBTEXT)
+            surface.blit(empty, (list_rect.x, list_rect.y))
 
     def _draw_project_overview(self, surface: pygame.Surface, font: pygame.font.Font, project: GameProject, rect: pygame.Rect, *, selected: bool) -> None:
         """Компактная карточка проекта в правой колонке действий."""
@@ -706,13 +769,26 @@ class GamePygameUI:
 
     # Обработчики --------------------------------------------------------
     def handle_mouse_click(self, pos: Tuple[int, int]) -> None:
+        # Переключение вкладок "Офис / Проекты"
+        for rect, mode in self.center_tabs:
+            if rect.collidepoint(pos):
+                self.center_mode = mode
+                return
+
         # Клик внутри сцены офиса: выбираем сотрудника по аватару
-        if self.office_view.rect.collidepoint(pos):
+        if self.center_mode == "office" and self.office_view.rect.collidepoint(pos):
             idx = self.office_view.handle_click(pos)
             if idx is not None:
                 self.selected_employee = idx
                 self.office_view.set_selected_employee(idx)
             return
+
+        # Клик по карточке проекта в центральном режиме проектов
+        if self.center_mode == "projects":
+            for rect, idx in self.center_project_slots:
+                if rect.collidepoint(pos):
+                    self.selected_project = idx
+                    return
 
         for rect, idx in self.employee_slots:
             if rect.collidepoint(pos):
